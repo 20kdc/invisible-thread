@@ -240,7 +240,7 @@ class ITStateConnected extends ITState {
 	stateConnectedSendMsg() {
 		try {
 			let text = $("stateConnectedMessage").value;
-			this.log.innerText += "Sent: " + msgContent.text + "\n";
+			this.log.innerText += "Sent: " + text + "\n";
 			this.conn.channel.send(JSON.stringify({
 				type: "msg",
 				text: text
