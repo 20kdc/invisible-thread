@@ -1,6 +1,89 @@
 <html>
 	<head>
+		<script src="webrtcWrapper.js"></script>
+		<script src="neighquery.js"></script>
+		<script src="invisibleThread.js"></script>
+		<style>
+			body {
+				display: flex;
+				flex-direction: column;
+			}
+			textarea {
+				resize: none;
+			}
+			.teufort {
+				display: flex;
+			}
+			.teufort > * {
+				flex: 1;
+			}
+			.flexH {
+				display: flex;
+			}
+			.flexV {
+				display: flex;
+				flex-direction: column;
+			}
+			textarea {
+				width: 100%;
+			}
+		</style>
 	</head>
-	<body>
+	<body onload="boot()">
+		<h1>invisible-thread b e t a</h1>
+		<i>peer to peer, bring your own signalling</i>
+		<div id="stateMachine" class="flexV">
+			<div id="stateInit" class="flexV">
+				<div class="teufort">
+					<div class="flexV">
+						<h2>Send this to a friend...</h2>
+						<textarea rows="25" id="stateInitSend">(Loading...)</textarea>
+						<button onclick="copyText('stateInitSend')">Copy</button>
+						<center><p><i>Technical details: <span id="stateInitStatus"></span></i></p></center>
+						<button onclick="onBtn('stateInitSendReady')">I've sent the text</button>
+					</div>
+					<div class="flexV">
+						<h2>...or copy what they gave you!</h2>
+						<textarea rows="25" id="stateInitRecv"></textarea>
+						<center><p><i>Pressing 'Confirm' will start the connection process. You will have a limited amount of time to get the response back to your friend.</i></p></center>
+						<button onclick="onBtn('stateInitRecvConfirm')">Confirm</button>
+					</div>
+				</div>
+			</div>
+			<div id="stateCriticalError" class="flexV">
+				<h2>CRITICAL ERROR</h2>
+				<textarea rows="25" id="stateCriticalErrorText"></textarea>
+				<button onclick="copyText('stateCriticalErrorText')">Copy</button>
+			</div>
+			<div id="stateAnswerer" class="flexV">
+				<h2>Send this back:</h2>
+				<textarea rows="25" id="stateAnswererTicket">(Loading...)</textarea>
+				<button onclick="copyText('stateAnswererTicket')">Copy</button>
+				<center><p><i>Technical details: <span id="stateAnswererStatus"></span></i></p></center>
+				<button onclick="onBtn('stateAnswererShutdown')">...I don't think it worked</button>
+			</div>
+			<div id="stateInitiator" class="flexV">
+				<h2>Copy in the answer your friend gives!</h2>
+				<textarea rows="25" id="stateInitiatorTicket"></textarea>
+				<center><p><i>Technical details: <span id="stateInitiatorStatus"></span></i></p></center>
+				<button onclick="onBtn('stateInitiatorAccept')">Ok, I copied it!</button>
+			</div>
+			<div id="stateInitiatorWaiting" class="flexV">
+				<h2>Please wait...</h2>
+				<center><p><i>Technical details: <span id="stateInitiatorWaitingStatus"></span></i></p></center>
+				<button onclick="onBtn('stateInitiatorWaitingHalt')">...I don't think it worked</button>
+			</div>
+			<div id="stateConnected" class="flexV">
+				<h2>Connected</h2>
+				<center><p><i>Technical details: <span id="stateConnectedStatus"></span></i></p></center>
+				<div class="flexV" id="stateConnectedFiles">
+					<input type="file" id="stateConnectedFile">
+					<button onclick="onBtn('stateConnectedSendFile')">Send File</button>
+					<textarea rows="25" id="stateConnectedMessage"></textarea>
+					<button onclick="onBtn('stateConnectedSendMsg')">Send Message</button>
+				</div>
+				<pre id="stateConnectedLog"></pre>
+			</div>
+		</div>
 	</body>
 </html>
