@@ -21,6 +21,10 @@ $.removeAllChildren = function (n) {
 	}
 };
 
+$.prependChild = function (parent, child) {
+	parent.insertBefore(child, parent.firstChild);
+};
+
 $.friendlyBytes = function (v) {
 	if (v >= 2000000000) {
 		return Math.floor(v / 1000000000) + "gb";

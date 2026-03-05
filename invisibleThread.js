@@ -498,10 +498,10 @@ class ITStateConnected extends ITState {
 		$.removeAllChildren(this.log);
 		this.sess = sess;
 		this.sess.onNewWidget = (widget) => {
-			this.log.appendChild(widget.realize());
+			$.prependChild(this.log, widget.realize());
 		};
 		for (let v of sess.widgets) {
-			this.log.appendChild(v.realize());
+			$.prependChild(this.log, v.realize());
 		}
 		this.connectStatus(sess.conn);
 	}
