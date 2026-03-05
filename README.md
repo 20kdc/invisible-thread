@@ -8,7 +8,7 @@ features:
 * [E2EE by virtue of being WebRTC and not using an intermediary server](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Using_data_channels#security)
 * relatively decent to navigate codebase by virtue of being small
 * vanillajs framework
-* no AI logos
+* no AI logos, code, etc.
 
 caveats:
 
