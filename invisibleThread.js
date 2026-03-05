@@ -47,6 +47,8 @@ class ITStateInit extends ITState {
 		initiator.onTicketUpdate = () => {
 			$("stateInitSend").value = initiator.ticket;
 		};
+		// since we can be re-invoked
+		$("stateInitSend").value = initiator.ticket;
 		initiator.onCriticalError = (ex) => {
 			$("stateInitSend").value = "CRITICAL ERROR: " + ex;
 		};
@@ -140,7 +142,7 @@ class ITStateInitiator extends ITState {
 	}
 }
 
-const IT_FILE_AGGRESSION = 0x1000000;
+const IT_FILE_AGGRESSION = 0x10000;
 const IT_FILE_CHUNK = 1024;
 
 /// This can work with Blob (for sending/reading) or ArrayBuffer (for receiving/writing).
@@ -224,6 +226,8 @@ class ITStateConnected extends ITState {
 			}
 		});
 		this.interval = setInterval(() => {
+			if (this.currentFileSend == null)
+				return;
 			let percent = this.currentFileSend.percent;
 			while (this.currentFileSend != null && this.conn.channel.bufferedAmount < IT_FILE_AGGRESSION) {
 				this.conn.channel.send(this.currentFileSend.readChunk());
@@ -272,8 +276,17 @@ class ITStateConnected extends ITState {
 
 // -- root handlers --
 
+class ITStateGoner extends ITState {
+	constructor() {
+		super("stateGoner");
+	}
+	stateGonerAccept() {
+		smSetState(itNewInitState());
+	}
+}
+
 function boot() {
-	smSetState(itNewInitState());
+	smSetState(new ITStateGoner());
 }
 
 function onBtn(name) {

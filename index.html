@@ -33,6 +33,11 @@
 		<h1>invisible-thread b e t a</h1>
 		<i>peer to peer, bring your own signalling</i>
 		<div id="stateMachine" class="flexV">
+			<div id="stateGoner" class="flexV">
+				<h2>Notice</h2>
+				<p>By using this site you accept that will have to query STUN servers (check <a href="webrtcWrapper.js">webrtcWrapper.js</a> for which ones, but probably Google's) in order to figure out your network's quirks. This step is an inherent part of most if not all P2P applications.</p>
+				<button onclick="onBtn('stateGonerAccept')">Alright</button>
+			</div>
 			<div id="stateInit" class="flexV">
 				<div class="teufort">
 					<div class="flexV">
