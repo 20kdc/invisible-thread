@@ -508,6 +508,7 @@ class ITStateConnected extends ITState {
 	stateConnectedSendMsg() {
 		try {
 			let text = $("stateConnectedMessage").value;
+			$("stateConnectedMessage").value = "";
 			this.sess.addWidget(new ITMessageWidget(this.sess, "sent", text));
 			this.sess.conn.channel.send(JSON.stringify({
 				type: "msg",
