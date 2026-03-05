@@ -14,6 +14,26 @@ successors. We intend this dedication to be an overt act of relinquishment in pe
 function $(id) {
 	return document.getElementById(id);
 }
+
+$.removeAllChildren = function (n) {
+	while (n.firstChild) {
+		n.firstChild.remove();
+	}
+};
+
+$.friendlyBytes = function (v) {
+	if (v >= 2000000000) {
+		return Math.floor(v / 1000000000) + "gb";
+	}
+	if (v >= 2000000) {
+		return Math.floor(v / 1000000) + "mb";
+	}
+	if (v >= 2000) {
+		return Math.floor(v / 1000) + "kb";
+	}
+	return v + "b";
+};
+
 function copyText(id) {
 	try {
 		let area = $(id);

@@ -44,6 +44,12 @@ function smSetState(st) {
 	return st;
 }
 
+function onBtn(name) {
+	if (currentState[name]) {
+		currentState[name]();
+	}
+}
+
 // -- critical error --
 
 class ITStateCriticalError extends ITState {
@@ -97,6 +103,19 @@ function itNewInitState() {
 	return new ITStateInit(new WRWInitiator());
 }
 
+class ITStateGoner extends ITState {
+	constructor() {
+		super("stateGoner");
+	}
+	stateGonerAccept() {
+		smSetState(itNewInitState());
+	}
+}
+
+function boot() {
+	smSetState(new ITStateGoner());
+}
+
 class ITStateAnswerer extends ITState {
 	constructor(ticket) {
 		super("stateAnswerer");
@@ -110,7 +129,7 @@ class ITStateAnswerer extends ITState {
 			this.answerer.onStatusChange = null;
 			this.answerer.onConnectionEstablished = null;
 			this.answerer.onCriticalError = null;
-			smSetState(new ITStateConnected(this.answerer));
+			smSetState(new ITStateConnected(new ITSession(this.answerer)));
 		};
 		this.answerer.onCriticalError = (ex) => {
 			smSetState(new ITStateCriticalError("Answerer setup async", ex));
@@ -133,7 +152,7 @@ class ITStateInitiator extends ITState {
 			initiator.onStatusChange = null;
 			initiator.onConnectionEstablished = null;
 			initiator.onCriticalError = null;
-			smSetState(new ITStateConnected(initiator));
+			smSetState(new ITStateConnected(new ITSession(initiator)));
 		};
 		initiator.onCriticalError = (ex) => {
 			smSetState(new ITStateCriticalError("Initiator setup async", ex));
@@ -160,12 +179,16 @@ class ITStateInitiator extends ITState {
 	}
 }
 
-const IT_FILE_AGGRESSION = 0x10000;
-const IT_FILE_CHUNK = 1024;
+// -- The Connected State --
+
+let IT_FILE_AGGRESSION = 0x10000;
+let IT_FILE_CHUNK = 1024;
 
 /// This can work with Blob (for sending/reading) or ArrayBuffer (for receiving/writing).
+/// Also includes an ID for easier tracking.
 class ITFileChunker {
-	constructor(data) {
+	constructor(data, id) {
+		this.id = id;
 		this.data = data;
 		this.pos = 0;
 		this.size = (data.size === void 0) ? data.byteLength : data.size;
@@ -195,48 +218,33 @@ class ITFileChunker {
 	}
 }
 
-class ITStateConnected extends ITState {
+class ITSession {
 	constructor(conn) {
-		super("stateConnected");
-		this.log = $("stateConnectedLog");
-		this.log.innerText = "";
-		this.currentFileSend = null;
-		this.currentFileSendPercent = -1;
-		this.currentFileRecv = null;
-		this.currentFileRecvName = "file";
-		this.currentFileRecvPercent = -1;
 		this.conn = conn;
-		this.connectStatus(conn);
+		this.currentFileSend = null;
+		this.currentFileRecv = null;
+		this.widgets = [];
+		this.onNewWidget = null;
 		conn.forwardMessages((msg) => {
 			try {
 				if (msg instanceof ArrayBuffer) {
 					if (this.currentFileRecv != null) {
 						this.currentFileRecv.writeChunk(msg);
-						let percent = this.currentFileRecv.percent;
-						if (this.currentFileRecvPercent != percent) {
-							this.log.innerText += "File receive: " + percent + "%\n";
-							this.currentFileRecvPercent = percent;
-						}
 						if (this.currentFileRecv.complete) {
-							const blob = new Blob([this.currentFileRecv.data], {type: "application/octet-stream"});
-							let paragraph = document.createElement("p");
-							let child = document.createElement("a");
-							child.download = this.currentFileRecvName;
-							child.href = URL.createObjectURL(blob);
-							child.innerText = "Save file " + this.currentFileRecvName;
-							paragraph.appendChild(child);
-							$("stateConnectedFiles").appendChild(paragraph);
 							this.currentFileRecv = null;
 						}
 					}
 				} else {
 					let msgContent = JSON.parse(msg);
 					if (msgContent.type == "msg") {
-						this.log.innerText += "Received: " + msgContent.text + "\n";
+						this.addWidget(new ITMessageWidget(this, "received", "" + msgContent.text));
 					} else if (msgContent.type == "file") {
-						this.currentFileRecvName = "" + msgContent.name;
-						this.log.innerText += "Receiving file: " + msgContent.name + "\n";
-						this.currentFileRecv = new ITFileChunker(new ArrayBuffer(msgContent.size));
+						this.currentFileRecv = new ITFileChunker(new ArrayBuffer(msgContent.size), "" + msgContent.id);
+						this.addWidget(new ITReceiveFileWidget(this, "" + msgContent.name, this.currentFileRecv));
+					} else if (msgContent.type == "fileSendAbort") {
+						this.currentFileRecv = null;
+					} else if (msgContent.type == "fileRecvAbort") {
+						this.opAbortSendFile("" + msgContent.id);
 					}
 				}
 			} catch (ex) {
@@ -244,26 +252,226 @@ class ITStateConnected extends ITState {
 			}
 		});
 		this.interval = setInterval(() => {
-			if (this.currentFileSend == null)
-				return;
-			let percent = this.currentFileSend.percent;
 			while (this.currentFileSend != null && this.conn.channel.bufferedAmount < IT_FILE_AGGRESSION) {
 				this.conn.channel.send(this.currentFileSend.readChunk());
-				percent = this.currentFileSend.percent;
 				if (this.currentFileSend.complete)
 					this.currentFileSend = null;
 			}
-			if (this.currentFileSendPercent != percent) {
-				this.log.innerText += "File send: " + percent + "%\n";
-				this.currentFileSendPercent = percent;
+			for (let v of this.widgets) {
+				v.doUpdate();
 			}
 		}, 10);
+	}
+	addWidget(w) {
+		this.widgets.push(w);
+		if (this.onNewWidget)
+			this.onNewWidget(w);
+	}
+	opAbortRecvFile(id) {
+		if (this.currentFileRecv && this.currentFileRecv.id == id) {
+			this.conn.channel.send(JSON.stringify({
+				type: "fileRecvAbort",
+				id: id
+			}));
+			this.currentFileRecv = null;
+		}
+	}
+	opAbortSendFile(id) {
+		if (this.currentFileSend && this.currentFileSend.id == id) {
+			this.conn.channel.send(JSON.stringify({
+				type: "fileSendAbort"
+			}));
+			this.currentFileSend = null;
+		}
+	}
+}
+
+class ITWidget {
+	constructor(sess, title) {
+		this.sess = sess;
+		this.title = title;
+		this.realized = null;
+	}
+	realize() {
+		let parent = document.createElement("div");
+		parent.className = "widget";
+		this.realized = parent;
+		this.realizeContents(parent);
+		return parent;
+	}
+	realizeContents(parent) {
+		let titleBar = document.createElement("div");
+		titleBar.className = "widgetTitleBar";
+		let titleText = document.createElement("div");
+		titleText.className = "widgetTitleText";
+		titleText.appendChild(document.createTextNode(this.title + " "));
+		let closeButton = document.createElement("button");
+		closeButton.class = "closeButton";
+		closeButton.innerText = "x";
+		closeButton.onclick = () => this.doClose();
+		titleBar.appendChild(titleText);
+		titleBar.appendChild(closeButton);
+		parent.appendChild(titleBar);
+	}
+	// called by widget
+	updateContents() {
+		if (this.realized != null) {
+			$.removeAllChildren(this.realized);
+			this.realizeContents(this.realized);
+		}
+	}
+	doClose() {
+		if (this.realized != null) {
+			this.realized.parentNode.removeChild(this.realized);
+			this.realized = null;
+		}
+		this.sess.widgets = this.sess.widgets.filter((v) => v !== this);
+	}
+	doUpdate() {
+
+	}
+}
+
+class ITReceiveFileWidget extends ITWidget {
+	constructor(sess, fileRecvName, fileRecv) {
+		super(sess, "receiving: " + fileRecvName + " (" + $.friendlyBytes(fileRecv.size) + ")");
+		this.fileRecv = fileRecv;
+		this.blob = null;
+		this.ackState = "";
+	}
+	figureOutState() {
+		if (this.sess.currentFileRecv == this.fileRecv) {
+			return "receiving" + this.fileRecv.percent;
+		} else if (this.blob || this.fileRecv.complete) {
+			return "complete";
+		} else {
+			return "aborted";
+		}
+	}
+	realizeContents(parent) {
+		super.realizeContents(parent);
+		let state = this.figureOutState();
+		this.ackState = state;
+		if (this.blob != null) {
+			let paragraph = document.createElement("p");
+			let child = document.createElement("a");
+			child.download = this.currentFileRecvName;
+			child.href = URL.createObjectURL(this.blob);
+			child.innerText = "Save file";
+			paragraph.appendChild(child);
+			parent.appendChild(paragraph);
+		} else if (state == "aborted") {
+			parent.appendChild(document.createTextNode("Upload aborted"));
+		} else {
+			parent.appendChild(document.createTextNode("Downloading: " + this.fileRecv.percent + "%"));
+		}
+	}
+	doUpdate() {
+		if (this.blob == null && this.fileRecv.complete) {
+			this.blob = new Blob([this.fileRecv.data], {type: "application/octet-stream"});
+		}
+		if (this.ackState != this.figureOutState()) {
+			this.updateContents();
+		}
+	}
+	doClose() {
+		super.doClose();
+		this.sess.opAbortRecvFile(this.fileRecv.id);
+	}
+}
+
+class ITSendFileWidget extends ITWidget {
+	constructor(sess, fileSendName, fileSend) {
+		super(sess, "sending: " + fileSendName + " (" + $.friendlyBytes(fileSend.size) + ")");
+		this.fileSendName = fileSendName;
+		this.fileSend = fileSend;
+		this.queueWaiting = true;
+		this.ackState = "";
+	}
+	figureOutState() {
+		if (this.queueWaiting) {
+			return "queued";
+		} else if (this.sess.currentFileSend == this.fileSend) {
+			return "transmitting" + this.fileSend.percent;
+		} else if (this.fileSend.complete) {
+			return "complete";
+		} else {
+			return "aborted";
+		}
+	}
+	realizeContents(parent) {
+		super.realizeContents(parent);
+		let state = this.figureOutState();
+		if (state == "complete") {
+			parent.appendChild(document.createTextNode("Complete"));
+		} else if (state == "queued") {
+			parent.appendChild(document.createTextNode("Queued..."));
+		} else if (state == "aborted") {
+			parent.appendChild(document.createTextNode("Download aborted"));
+		} else {
+			parent.appendChild(document.createTextNode("Sending: " + this.fileSend.percent + "%"));
+		}
+		this.ackState = state;
+	}
+	doUpdate() {
+		if (this.queueWaiting) {
+			// queued
+			if (this.sess.currentFileSend == null) {
+				this.queueWaiting = false;
+				console.log("file transmit start opportunity");
+				// take opportunity to begin file transmit
+				this.sess.conn.channel.send(JSON.stringify({
+					type: "file",
+					name: this.fileSendName,
+					id: this.fileSend.id,
+					size: this.fileSend.size
+				}));
+				this.sess.currentFileSend = this.fileSend;
+				this.updateContents();
+			}
+		}
+		if (this.figureOutState() != this.ackState) {
+			this.updateContents();
+		}
+	}
+	doClose() {
+		super.doClose();
+		this.sess.opAbortSendFile(this.fileSend.id);
+	}
+}
+
+class ITMessageWidget extends ITWidget {
+	constructor(sess, title, text) {
+		super(sess, title);
+		this.text = text;
+	}
+	realizeContents(parent) {
+		super.realizeContents(parent);
+		let paragraph = document.createElement("pre");
+		paragraph.appendChild(document.createTextNode(this.text));
+		parent.appendChild(paragraph);
+	}
+}
+
+class ITStateConnected extends ITState {
+	constructor(sess) {
+		super("stateConnected");
+		this.log = $("stateConnectedLog");
+		$.removeAllChildren(this.log);
+		this.sess = sess;
+		this.sess.onNewWidget = (widget) => {
+			this.log.appendChild(widget.realize());
+		};
+		for (let v of sess.widgets) {
+			this.log.appendChild(v.realize());
+		}
+		this.connectStatus(sess.conn);
 	}
 	stateConnectedSendMsg() {
 		try {
 			let text = $("stateConnectedMessage").value;
-			this.log.innerText += "Sent: " + text + "\n";
-			this.conn.channel.send(JSON.stringify({
+			this.sess.addWidget(new ITMessageWidget(this.sess, "sent", text));
+			this.sess.conn.channel.send(JSON.stringify({
 				type: "msg",
 				text: text
 			}));
@@ -276,12 +484,7 @@ class ITStateConnected extends ITState {
 		try {
 			let selectedFile = $("stateConnectedFile").files[0];
 			if (selectedFile !== void 0) {
-				this.conn.channel.send(JSON.stringify({
-					type: "file",
-					name: selectedFile.name,
-					size: selectedFile.size
-				}));
-				this.currentFileSend = new ITFileChunker(selectedFile);
+				this.sess.addWidget(new ITSendFileWidget(this.sess, selectedFile.name, new ITFileChunker(selectedFile, "" + selectedFile.name)));
 			} else {
 				alert("You need to select a file!");
 			}
@@ -291,25 +494,3 @@ class ITStateConnected extends ITState {
 		}
 	}
 }
-
-// -- root handlers --
-
-class ITStateGoner extends ITState {
-	constructor() {
-		super("stateGoner");
-	}
-	stateGonerAccept() {
-		smSetState(itNewInitState());
-	}
-}
-
-function boot() {
-	smSetState(new ITStateGoner());
-}
-
-function onBtn(name) {
-	if (currentState[name]) {
-		currentState[name]();
-	}
-}
-
