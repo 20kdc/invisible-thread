@@ -187,8 +187,9 @@ let IT_FILE_CHUNK = 1024;
 /// This can work with Blob (for sending/reading) or ArrayBuffer (for receiving/writing).
 /// Also includes an ID for easier tracking.
 class ITFileChunker {
-	constructor(data, id) {
-		this.id = id;
+	constructor(data) {
+		// -1: has not been queued yet
+		this.id = -1;
 		this.data = data;
 		this.pos = 0;
 		this.size = (data.size === void 0) ? data.byteLength : data.size;
@@ -221,33 +222,49 @@ class ITFileChunker {
 class ITSession {
 	constructor(conn) {
 		this.conn = conn;
-		this.currentFileSend = null;
-		this.currentFileRecv = null;
 		this.widgets = [];
 		this.onNewWidget = null;
-		this.idCounter = 0;
+		// Control-stream files
+		this.currentBlobSend = null;
+		this.currentBlobRecv = null;
+		// Data-stream stream IDs
+		this.localStreamId = -1;
+		this.localStreamIdAcked = -1;
+		this.remoteStreamId = -1;
+
 		conn.forwardMessages((msg) => {
 			try {
 				if (msg instanceof ArrayBuffer) {
-					if (this.currentFileRecv != null) {
-						this.currentFileRecv.writeChunk(msg);
-						// [DESYNC] We don't drop currentFileRecv until an explicit abort.
+					if (msg.byteLength == 0) {
+						// [DESYNC] Marker packet tells us that the remote end is sending a new file.
+						this.remoteStreamId++;
+					} else if (this.currentBlobRecv != null && this.remoteStreamId == this.currentBlobRecv.id) {
+						this.currentBlobRecv.writeChunk(msg);
+						// [DESYNC] We don't drop currentBlobRecv until an explicit abort.
+						// In addition, the ID counter ensures each file stream is properly managed.
 					}
 				} else {
 					let msgContent = JSON.parse(msg);
 					if (msgContent.type == "msg") {
 						this.addWidget(new ITMessageWidget(this, "received", "" + msgContent.text));
 					} else if (msgContent.type == "file") {
-						if (this.currentFileRecv != null) {
+						if (this.currentBlobRecv != null) {
 							// [DESYNC] causes this to happen, which is bad.
 							alert("WARNING: File interrupted by other file. This isn't supposed to happen, and indicates a bug.");
 						}
-						this.currentFileRecv = new ITFileChunker(new ArrayBuffer(msgContent.size), "" + msgContent.id);
-						this.addWidget(new ITReceiveFileWidget(this, "" + msgContent.name, this.currentFileRecv));
-					} else if (msgContent.type == "fileSendAbort") {
-						this.currentFileRecv = null;
-					} else if (msgContent.type == "fileRecvAbort") {
-						this.opAbortSendFile("" + msgContent.id);
+						this.currentBlobRecv = new ITFileChunker(new ArrayBuffer(msgContent.size));
+						this.currentBlobRecv.id = msgContent.id;
+						this.conn.channel.send(JSON.stringify({
+							type: "blobAck",
+							id: msgContent.id
+						}));
+						this.addWidget(new ITReceiveFileWidget(this, "" + msgContent.name, this.currentBlobRecv));
+					} else if (msgContent.type == "blobAck") {
+						this.localStreamIdAcked = msgContent.id;
+					} else if (msgContent.type == "blobSendAbort") {
+						this.currentBlobRecv = null;
+					} else if (msgContent.type == "blobRecvAbort") {
+						this.opAbortSendBlob(msgContent.id);
 					}
 				}
 			} catch (ex) {
@@ -255,13 +272,16 @@ class ITSession {
 			}
 		});
 		this.interval = setInterval(() => {
-			while (this.currentFileSend != null && this.conn.channel.bufferedAmount < IT_FILE_AGGRESSION) {
-				// [DESYNC]
-				// It seems like the JSON messages and the byte-array messages are out of sync somehow.
-				// To keep them in sync, we require an explicit abort message to indicate completion.
-				if (this.currentFileSend.complete)
+			// [DESYNC]
+			// It seems like the JSON messages and the byte-array messages are out of sync somehow.
+			// To keep them in sync, we require:
+			// * an explicit abort message to indicate completion
+			// * acknowledgement of
+			while (this.localStreamId == this.localStreamIdAcked && this.currentBlobSend != null && this.conn.channel.bufferedAmount < IT_FILE_AGGRESSION) {
+				if (this.currentBlobSend.complete)
 					break;
-				this.conn.channel.send(this.currentFileSend.readChunk());
+				// it's important the completion check is done; an empty packet would be misread as a marker!
+				this.conn.channel.send(this.currentBlobSend.readChunk());
 			}
 			for (let v of this.widgets) {
 				v.doUpdate();
@@ -273,25 +293,35 @@ class ITSession {
 		if (this.onNewWidget)
 			this.onNewWidget(w);
 	}
-	opAbortRecvFile(id) {
-		if (this.currentFileRecv && this.currentFileRecv.id == id) {
+	opBeginFile(name, fileSend) {
+		// take opportunity to begin file transmit
+		fileSend.id = ++this.localStreamId;
+		this.conn.channel.send(JSON.stringify({
+			type: "file",
+			name: name,
+			id: fileSend.id,
+			size: fileSend.size
+		}));
+		// send empty 'marker' packet
+		this.conn.channel.send(new ArrayBuffer(0));
+		this.currentBlobSend = fileSend;
+	}
+	opAbortRecvBlob(id) {
+		if (this.currentBlobRecv && this.currentBlobRecv.id == id) {
 			this.conn.channel.send(JSON.stringify({
-				type: "fileRecvAbort",
+				type: "blobRecvAbort",
 				id: id
 			}));
-			this.currentFileRecv = null;
+			this.currentBlobRecv = null;
 		}
 	}
-	opAbortSendFile(id) {
-		if (this.currentFileSend && this.currentFileSend.id == id) {
+	opAbortSendBlob(id) {
+		if (this.currentBlobSend && this.currentBlobSend.id == id) {
 			this.conn.channel.send(JSON.stringify({
-				type: "fileSendAbort"
+				type: "blobSendAbort"
 			}));
-			this.currentFileSend = null;
+			this.currentBlobSend = null;
 		}
-	}
-	genId() {
-		return "" + (this.idCounter++);
 	}
 }
 
@@ -344,12 +374,13 @@ class ITWidget {
 class ITReceiveFileWidget extends ITWidget {
 	constructor(sess, fileRecvName, fileRecv) {
 		super(sess, "receiving: " + fileRecvName + " (" + $.friendlyBytes(fileRecv.size) + ")");
+		this.filename = fileRecvName;
 		this.fileRecv = fileRecv;
 		this.blob = null;
 		this.ackState = "";
 	}
 	figureOutState() {
-		if (this.sess.currentFileRecv == this.fileRecv) {
+		if (this.sess.currentBlobRecv == this.fileRecv) {
 			return "receiving" + this.fileRecv.percent;
 		} else if (this.fileRecv.complete || (this.blob != null)) {
 			return "complete";
@@ -364,8 +395,8 @@ class ITReceiveFileWidget extends ITWidget {
 		if (this.blob != null) {
 			let paragraph = document.createElement("p");
 			let child = document.createElement("a");
-			child.download = this.currentFileRecvName;
-			child.href = URL.createObjectURL(this.blob);
+			child.download = this.filename;
+			child.href = this.blobObjectURL;
 			child.innerText = "Save file";
 			paragraph.appendChild(child);
 			parent.appendChild(paragraph);
@@ -377,8 +408,9 @@ class ITReceiveFileWidget extends ITWidget {
 	}
 	doUpdate() {
 		if (this.blob == null && this.fileRecv.complete) {
-			this.sess.opAbortRecvFile(this.fileRecv.id);
+			this.sess.opAbortRecvBlob(this.fileRecv.id);
 			this.blob = new Blob([this.fileRecv.data], {type: "application/octet-stream"});
+			this.blobObjectURL = URL.createObjectURL(this.blob);
 		}
 		if (this.ackState != this.figureOutState()) {
 			this.updateContents();
@@ -386,7 +418,10 @@ class ITReceiveFileWidget extends ITWidget {
 	}
 	doClose() {
 		super.doClose();
-		this.sess.opAbortRecvFile(this.fileRecv.id);
+		this.sess.opAbortRecvBlob(this.fileRecv.id);
+		if (this.blob != null) {
+			URL.revokeObjectURL(this.blobObjectURL);
+		}
 	}
 }
 
@@ -401,7 +436,7 @@ class ITSendFileWidget extends ITWidget {
 	figureOutState() {
 		if (this.queueWaiting) {
 			return "queued";
-		} else if (this.sess.currentFileSend == this.fileSend) {
+		} else if (this.sess.currentBlobSend == this.fileSend) {
 			return "transmitting" + this.fileSend.percent;
 		} else if (this.fileSend.complete) {
 			return "complete";
@@ -426,17 +461,10 @@ class ITSendFileWidget extends ITWidget {
 	doUpdate() {
 		if (this.queueWaiting) {
 			// queued
-			if (this.sess.currentFileSend == null) {
+			if (this.sess.currentBlobSend == null) {
 				this.queueWaiting = false;
 				console.log("file transmit start opportunity");
-				// take opportunity to begin file transmit
-				this.sess.conn.channel.send(JSON.stringify({
-					type: "file",
-					name: this.fileSendName,
-					id: this.fileSend.id,
-					size: this.fileSend.size
-				}));
-				this.sess.currentFileSend = this.fileSend;
+				this.sess.opBeginFile(this.fileSendName, this.fileSend);
 				this.updateContents();
 			}
 		}
@@ -446,7 +474,7 @@ class ITSendFileWidget extends ITWidget {
 	}
 	doClose() {
 		super.doClose();
-		this.sess.opAbortSendFile(this.fileSend.id);
+		this.sess.opAbortSendBlob(this.fileSend.id);
 	}
 }
 
@@ -494,7 +522,7 @@ class ITStateConnected extends ITState {
 		try {
 			let selectedFile = $("stateConnectedFile").files[0];
 			if (selectedFile !== void 0) {
-				this.sess.addWidget(new ITSendFileWidget(this.sess, selectedFile.name, new ITFileChunker(selectedFile, this.sess.genId())));
+				this.sess.addWidget(new ITSendFileWidget(this.sess, selectedFile.name, new ITFileChunker(selectedFile)));
 			} else {
 				alert("You need to select a file!");
 			}
