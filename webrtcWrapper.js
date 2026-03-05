@@ -178,7 +178,7 @@ class WRWInitiator extends WRWBaseConnection {
 			sdp: answerTicket
 		}).then(() => {
 			// now we have to ride out connection state until we're done'
-		}, this.onCriticalError);
+		}, this.fireOnCriticalError);
 	}
 }
 
