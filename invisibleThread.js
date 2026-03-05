@@ -225,20 +225,23 @@ class ITSession {
 		this.currentFileRecv = null;
 		this.widgets = [];
 		this.onNewWidget = null;
+		this.idCounter = 0;
 		conn.forwardMessages((msg) => {
 			try {
 				if (msg instanceof ArrayBuffer) {
 					if (this.currentFileRecv != null) {
 						this.currentFileRecv.writeChunk(msg);
-						if (this.currentFileRecv.complete) {
-							this.currentFileRecv = null;
-						}
+						// [DESYNC] We don't drop currentFileRecv until an explicit abort.
 					}
 				} else {
 					let msgContent = JSON.parse(msg);
 					if (msgContent.type == "msg") {
 						this.addWidget(new ITMessageWidget(this, "received", "" + msgContent.text));
 					} else if (msgContent.type == "file") {
+						if (this.currentFileRecv != null) {
+							// [DESYNC] causes this to happen, which is bad.
+							alert("WARNING: File interrupted by other file. This isn't supposed to happen, and indicates a bug.");
+						}
 						this.currentFileRecv = new ITFileChunker(new ArrayBuffer(msgContent.size), "" + msgContent.id);
 						this.addWidget(new ITReceiveFileWidget(this, "" + msgContent.name, this.currentFileRecv));
 					} else if (msgContent.type == "fileSendAbort") {
@@ -253,9 +256,12 @@ class ITSession {
 		});
 		this.interval = setInterval(() => {
 			while (this.currentFileSend != null && this.conn.channel.bufferedAmount < IT_FILE_AGGRESSION) {
-				this.conn.channel.send(this.currentFileSend.readChunk());
+				// [DESYNC]
+				// It seems like the JSON messages and the byte-array messages are out of sync somehow.
+				// To keep them in sync, we require an explicit abort message to indicate completion.
 				if (this.currentFileSend.complete)
-					this.currentFileSend = null;
+					break;
+				this.conn.channel.send(this.currentFileSend.readChunk());
 			}
 			for (let v of this.widgets) {
 				v.doUpdate();
@@ -283,6 +289,9 @@ class ITSession {
 			}));
 			this.currentFileSend = null;
 		}
+	}
+	genId() {
+		return "" + (this.idCounter++);
 	}
 }
 
@@ -342,7 +351,7 @@ class ITReceiveFileWidget extends ITWidget {
 	figureOutState() {
 		if (this.sess.currentFileRecv == this.fileRecv) {
 			return "receiving" + this.fileRecv.percent;
-		} else if (this.blob || this.fileRecv.complete) {
+		} else if (this.fileRecv.complete || (this.blob != null)) {
 			return "complete";
 		} else {
 			return "aborted";
@@ -368,6 +377,7 @@ class ITReceiveFileWidget extends ITWidget {
 	}
 	doUpdate() {
 		if (this.blob == null && this.fileRecv.complete) {
+			this.sess.opAbortRecvFile(this.fileRecv.id);
 			this.blob = new Blob([this.fileRecv.data], {type: "application/octet-stream"});
 		}
 		if (this.ackState != this.figureOutState()) {
@@ -484,7 +494,7 @@ class ITStateConnected extends ITState {
 		try {
 			let selectedFile = $("stateConnectedFile").files[0];
 			if (selectedFile !== void 0) {
-				this.sess.addWidget(new ITSendFileWidget(this.sess, selectedFile.name, new ITFileChunker(selectedFile, "" + selectedFile.name)));
+				this.sess.addWidget(new ITSendFileWidget(this.sess, selectedFile.name, new ITFileChunker(selectedFile, this.sess.genId())));
 			} else {
 				alert("You need to select a file!");
 			}
