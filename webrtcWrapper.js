@@ -1,3 +1,16 @@
+/*
+ * This is free and unencumbered software released into the public domain.
+ *
+ * Anyone is free to copy, modify, publish, use, compile, sell, or distribute this software, either in source code form or as a compiled binary, for any purpose, commercial or non-commercial, and by any means.
+ *
+ * In jurisdictions that recognize copyright laws, the author or authors of this software dedicate any and all copyright interest in the software to the public domain. We make this dedication for the benefit of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of relinquishment in perpetuity of all present and future rights to this software under copyright law.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * For more information, please refer to <http://unlicense.org/>
+ */
+
 const WRW_COMPRESSION = [
 	["\n", "\r\n"],
 	["\x80", "IN IP4 "],
@@ -30,14 +43,12 @@ const WRW_COMPRESSION = [
 	["\x9B", "a=extmap-allow-mixed\n"],
 	["\x9C", "s=-\n"],
 	["\x9D", "0.0.0.0\n"],
+	["\x9E", "o=mozilla...THIS_IS_SDPARTA-99.0 "],
+	["\x9F", "a=sendrecv\n"],
+	["\xA0", "a=msid-semantic:WMS *\n"],
+	["\xA1", " 1 UDP "],
+	["\xA2", " 1 TCP "],
 ]
-
-function wrwEncodeTicket(modeChar, ticket) {
-	for (let i = 0; i < WRW_COMPRESSION.length; i++) {
-		ticket = ticket.replaceAll(WRW_COMPRESSION[i][1], WRW_COMPRESSION[i][0]);
-	}
-	return btoa(modeChar + ticket);
-}
 
 function wrwDecodeTicket(ticket) {
 	ticket = atob(ticket);
@@ -50,6 +61,17 @@ function wrwDecodeTicket(ticket) {
 
 function wrwGetTicketMode(ticket) {
 	return atob(ticket).substring(0, 1);
+}
+
+function wrwEncodeTicket(modeChar, ticket) {
+	for (let i = 0; i < WRW_COMPRESSION.length; i++) {
+		ticket = ticket.replaceAll(WRW_COMPRESSION[i][1], WRW_COMPRESSION[i][0]);
+	}
+	let encoded = btoa(modeChar + ticket);
+	if (wrwDecodeTicket(encoded) != ticket) {
+		throw new Error("wrwEncodeTicket: Round-trip did not match");
+	}
+	return encoded;
 }
 
 /// WebRTC 'base opening handler'.
