@@ -11,6 +11,11 @@ successors. We intend this dedication to be an overt act of relinquishment in pe
  * For more information, please refer to <http://unlicense.org/>
  */
 
+// -- on error --
+window.onerror = function(e, url, line) {
+	alert("Exception: " + url + ":" + line + ", " + e);
+};
+
 // -- state machine --
 
 class ITState {

@@ -11,52 +11,117 @@ successors. We intend this dedication to be an overt act of relinquishment in pe
  * For more information, please refer to <http://unlicense.org/>
  */
 
-const WRW_COMPRESSION = [
-	["\n", "\r\n"],
-	["\x80", "IN IP4 "],
-	["\x81", "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\n"],
-	["\x82", "a=max-message-size:"],
-	["\x83", "v=0\n"],
-	["\x84", "o=- "],
-	["\x85", "a=ice-options:trickle\n"],
-	["\x86", "a=fingerprint:sha-256 "],
-	["\x87", "a=setup:actpass\n"],
-	["\x88", "a=mid:0\n"],
-	["\x89", " generation 0 ufrag "],
-	["\x8A", " typ srflx"],
-	["\x8B", " typ host"],
-	["\x8C", " network-cost "],
-	["\x8D", "999\n"],
-	["\x8E", "a=ice-pwd:"],
-	["\x8F", "a=ice-ufrag:"],
-	["\x90", "a=msid-semantic: WMS\n"],
-	["\x91", "a=sctp-port:"],
-	["\x92", "a=candidate:"],
-	["\x93", " 1 udp "],
-	["\x94", "192.168.0."],
-	["\x95", "192.168."],
-	["\x96", " raddr "],
-	["\x97", " rport "],
-	["\x98", "127.0.0.1\n"],
-	["\x99", "t=0 0\n"],
-	["\x9A", "a=group:BUNDLE 0\n"],
-	["\x9B", "a=extmap-allow-mixed\n"],
-	["\x9C", "s=-\n"],
-	["\x9D", "0.0.0.0\n"],
-	["\x9E", "o=mozilla...THIS_IS_SDPARTA-99.0 "],
-	["\x9F", "a=sendrecv\n"],
-	["\xA0", "a=msid-semantic:WMS *\n"],
-	["\xA1", " 1 UDP "],
-	["\xA2", " 1 TCP "],
-]
+const WRW_SYMBOLS = [
+	"\r\n",
+	" IN IP4 127.0.0.1\r\n",
+	"a=fingerprint:sha-256 ",
+	"a=ice-options:trickle\r\n",
+	"a=setup:actpass\r\n",
+	"a=sctp-port:",
+	"a=max-message-size:262144\r\n",
+	"a=candidate:",
+	" udp ",
+	" UDP ",
+	" tcp ",
+	" TCP ",
+	"127.0.0.1",
+	"192.168.",
+	"0.",
+	"10.",
+	"0:", "1:", "2:", "3:", "4:", "5:", "6:", "7:", "8:", "9:", "A:", "B:", "C:", "D:", "E:", "F:",
+	" network-cost ",
+	" ufrag ",
+	" rport ",
+	"raddr ",
+	" typ srflx ",
+	" typ host ",
+	"generation 0",
+	"a=ice-ufrag:",
+	"a=ice-pwd:",
+	"c=IN IP4 0.0.0.0\r\n",
+	"m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n",
+	"a=msid-semantic: WMS\r\n",
+	"a=msid-semantic:WMS\r\n", // mozilla
+	"a=extmap-allow-mixed\r\n",
+	"a=group:BUNDLE 0\r\n",
+	"t=0 0\r\n",
+	"s=-\r\n",
+	"v=0\r\n",
+	"a=mid:0\r\n"
+];
+
+function wrwCompress(text) {
+	let data = "";
+	while (text.length > 0) {
+		let v = text.charCodeAt(0);
+		// fallback encoding:
+		// 0-0x7F: direct
+		// 0xF0-0xFE: encode 12-bit(ish) number
+		// 0xFF: followed by BE full code
+		if (v >= 0x80) {
+			data += String.fromCharCode(0xFF, v >> 8, v & 0xFF);
+			text = text.substring(1);
+		} else {
+			let maxLen = 1;
+			let sym = String.fromCharCode(v);
+			let efficiency = maxLen / sym.length;
+			for (let i = 3; i < 4; i++) {
+				let proposal = text.substring(0, i);
+				let parsed = parseInt(proposal, 10);
+				if (parsed != NaN && parsed >= 0 && parsed < 0xF00 && (parsed.toString() == proposal)) {
+					maxLen = proposal.length;
+					sym = String.fromCharCode(0xF0 | (parsed >> 8), parsed & 0xFF);
+					efficiency = maxLen / sym.length;
+				}
+			}
+			for (let i = 0; i < WRW_SYMBOLS.length; i++) {
+				let symEff = WRW_SYMBOLS[i].length;
+				if (efficiency < symEff) {
+					if (text.startsWith(WRW_SYMBOLS[i])) {
+						maxLen = WRW_SYMBOLS[i].length;
+						sym = String.fromCharCode(0x80 + i);
+						efficiency = maxLen / sym.length;
+					}
+				}
+			}
+			data += sym;
+			text = text.substring(maxLen);
+		}
+	}
+	return data;
+}
+
+function wrwDecompress(data) {
+	let text = "";
+	while (data.length > 0) {
+		let v = data.charCodeAt(0);
+		if (v == 0xFF) {
+			let v2 = data.charCodeAt(1);
+			let v3 = data.charCodeAt(2);
+			text += String.fromCharCode((v2 << 8) | v3);
+			data = data.substring(3);
+		} else if (v >= 0xF0) {
+			// number
+			let v2 = data.charCodeAt(1);
+			text += (((v & 0xF) << 8) | v2).toString();
+			data = data.substring(2);
+		} else {
+			if (v < 0x80) {
+				text += String.fromCharCode(v);
+			} else {
+				// symbol
+				text += WRW_SYMBOLS[v - 0x80];
+			}
+			data = data.substring(1);
+		}
+	}
+	return text;
+}
 
 function wrwDecodeTicket(ticket) {
 	ticket = atob(ticket);
 	ticket = ticket.substring(1);
-	for (let i = WRW_COMPRESSION.length - 1; i >= 0; i--) {
-		ticket = ticket.replaceAll(WRW_COMPRESSION[i][0], WRW_COMPRESSION[i][1]);
-	}
-	return ticket;
+	return wrwDecompress(ticket);
 }
 
 function wrwGetTicketMode(ticket) {
@@ -64,11 +129,10 @@ function wrwGetTicketMode(ticket) {
 }
 
 function wrwEncodeTicket(modeChar, ticket) {
-	for (let i = 0; i < WRW_COMPRESSION.length; i++) {
-		ticket = ticket.replaceAll(WRW_COMPRESSION[i][1], WRW_COMPRESSION[i][0]);
-	}
-	let encoded = btoa(modeChar + ticket);
-	if (wrwDecodeTicket(encoded) != ticket) {
+	let encoded = btoa(modeChar + wrwCompress(ticket));
+	let decoded = wrwDecodeTicket(encoded);
+	if (decoded != ticket) {
+		console.log("mismatch", [decoded, ticket]);
 		throw new Error("wrwEncodeTicket: Round-trip did not match");
 	}
 	return encoded;
